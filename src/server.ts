@@ -53,8 +53,10 @@ app.get('/health', (c) => {
   });
 });
 
-// ── POST /mcp (JSON-RPC, Bearer required) ────────
-app.post('/mcp', async (c) => {
+// JSON-RPC handler — registered at both `/` and `/mcp` so the wrapper works
+// behind a Tailscale Funnel that strips the /mcp prefix AND when accessed
+// directly on http://127.0.0.1:8787/mcp.
+const handleRpc = async (c: any) => {
   const denial = await requireAuth(c);
   if (denial) return denial;
 
@@ -81,10 +83,12 @@ app.post('/mcp', async (c) => {
       error: { code: -32603, message: 'internal_error', data: e.message },
     }, 500);
   }
-});
+};
+app.post('/', handleRpc);
+app.post('/mcp', handleRpc);
 
-// ── GET /mcp/sse (Server-Sent Events, Bearer required) ───
-app.get('/mcp/sse', async (c) => {
+// SSE handler — same dual mounting (root + /mcp/sse)
+const handleSse = async (c: any) => {
   const denial = await requireAuth(c);
   if (denial) return denial;
 
@@ -111,7 +115,9 @@ app.get('/mcp/sse', async (c) => {
       });
     });
   });
-});
+};
+app.get('/sse', handleSse);
+app.get('/mcp/sse', handleSse);
 
 // ── Boot ─────────────────────────────────────────
 console.error(`[server] listening on http://${HOST}:${PORT}`);
