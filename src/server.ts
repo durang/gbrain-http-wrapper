@@ -27,6 +27,23 @@ initPool();
 
 const app = new Hono();
 
+// ── CORS: claude.ai web/desktop sometimes preflight from a browser origin ──
+app.use('*', async (c, next) => {
+  // Reflect origin so anthropic web (claude.ai) and Desktop (file://) both work.
+  // Auth is via Bearer in Authorization header — CORS is just so the browser
+  // doesn't block the request before it gets to our auth check.
+  const origin = c.req.header('Origin') || '*';
+  c.header('Access-Control-Allow-Origin', origin);
+  c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id, mcp-protocol-version');
+  c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  c.header('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+  c.header('Access-Control-Max-Age', '86400');
+  if (c.req.method === 'OPTIONS') {
+    return c.body(null, 204);
+  }
+  await next();
+});
+
 // ── Middleware: extract + validate Bearer ────────
 async function requireAuth(c: any) {
   const header = c.req.header('Authorization') || '';
@@ -118,6 +135,33 @@ const handleSse = async (c: any) => {
 };
 app.get('/sse', handleSse);
 app.get('/mcp/sse', handleSse);
+
+// ── MCP Streamable HTTP: GET on the JSON-RPC endpoint upgrades to SSE for
+// server-initiated messages. Per spec: same path serves both POST and GET. ──
+const handleStreamableGet = async (c: any) => {
+  const denial = await requireAuth(c);
+  if (denial) return denial;
+  // We don't push server-initiated messages currently, so respond with an
+  // SSE stream that just heartbeats. Some clients require this to consider
+  // the server "connected".
+  return stream(c, async (sw) => {
+    c.header('Content-Type', 'text/event-stream');
+    c.header('Cache-Control', 'no-cache');
+    c.header('Connection', 'keep-alive');
+    await sw.write(`: connected ${Date.now()}\n\n`);
+    const heartbeat = setInterval(() => {
+      sw.write(`: heartbeat ${Date.now()}\n\n`).catch(() => clearInterval(heartbeat));
+    }, 15_000);
+    await new Promise<void>((resolve) => {
+      c.req.raw.signal?.addEventListener('abort', () => {
+        clearInterval(heartbeat);
+        resolve();
+      });
+    });
+  });
+};
+app.get('/', handleStreamableGet);
+app.get('/mcp', handleStreamableGet);
 
 // ── Boot ─────────────────────────────────────────
 console.error(`[server] listening on http://${HOST}:${PORT}`);
