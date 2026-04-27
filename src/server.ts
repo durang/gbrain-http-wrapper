@@ -17,6 +17,9 @@ import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { initPool, callMcp, poolStatus, shutdownPool } from './stdio-pool.ts';
 import { validateToken, shutdownAuth } from './auth.ts';
+import { oauthRouter, shutdownOauth } from './oauth.ts';
+
+const BASE_URL = (process.env.WRAPPER_BASE_URL || '').replace(/\/$/, '');
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -45,19 +48,27 @@ app.use('*', async (c, next) => {
 });
 
 // ── Middleware: extract + validate Bearer ────────
+// Returns 401 with RFC 9728-compliant WWW-Authenticate header pointing to the
+// resource metadata so MCP-aware clients can discover the OAuth flow.
 async function requireAuth(c: any) {
   const header = c.req.header('Authorization') || '';
   const match = header.match(/^Bearer\s+(\S+)$/);
+  const challenge = `Bearer realm="gbrain", resource_metadata="${BASE_URL}/mcp/.well-known/oauth-protected-resource"`;
   if (!match) {
+    c.header('WWW-Authenticate', challenge);
     return c.json({ error: 'missing_auth', detail: 'Bearer token required' }, 401);
   }
   const result = await validateToken(match[1]);
   if (!result.ok) {
+    c.header('WWW-Authenticate', `${challenge}, error="invalid_token", error_description="${result.error}"`);
     return c.json({ error: 'invalid_auth', detail: result.error }, 401);
   }
   c.set('tokenName', result.name);
   return null;
 }
+
+// ── Mount OAuth router (handles /.well-known/* and /oauth/*) ──────
+app.route('/', oauthRouter);
 
 // ── GET /health (no auth) ────────────────────────
 app.get('/health', (c) => {
@@ -178,6 +189,7 @@ process.on('SIGINT', async () => {
   server.stop();
   shutdownPool();
   await shutdownAuth();
+  await shutdownOauth();
   process.exit(0);
 });
 process.on('SIGTERM', async () => {
@@ -185,5 +197,6 @@ process.on('SIGTERM', async () => {
   server.stop();
   shutdownPool();
   await shutdownAuth();
+  await shutdownOauth();
   process.exit(0);
 });
