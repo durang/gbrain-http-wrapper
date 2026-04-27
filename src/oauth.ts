@@ -179,10 +179,23 @@ async function consumeRefreshToken(refresh: string) {
 // ─── Hono router ───────────────────────────────────
 export const oauthRouter = new Hono();
 
-// Discovery
+// Discovery — OAuth 2.1 (RFC 9728 + RFC 8414)
 oauthRouter.get('/.well-known/oauth-protected-resource', (c) => c.json(protectedResourceMetadata()));
 oauthRouter.get('/.well-known/oauth-protected-resource/mcp', (c) => c.json(protectedResourceMetadata()));
 oauthRouter.get('/.well-known/oauth-authorization-server', (c) => c.json(authServerMetadata()));
+
+// Discovery — OpenID Connect Discovery 1.0 (some clients including claude.ai
+// probe this endpoint). We return the OAuth metadata supplemented with the
+// minimum OIDC required fields, declaring we don't issue id_tokens. This is
+// enough to satisfy clients that fall through to oauth flows.
+oauthRouter.get('/.well-known/openid-configuration', (c) => c.json({
+  ...authServerMetadata(),
+  subject_types_supported: ['public'],
+  id_token_signing_alg_values_supported: ['none'],
+  // We do not implement id_tokens; clients should use access_token only.
+  // userinfo_endpoint absent on purpose — we don't have user identity beyond
+  // the master-password approval gate.
+}));
 
 // Dynamic Client Registration (RFC 7591)
 oauthRouter.post('/oauth/register', async (c) => {
@@ -246,7 +259,7 @@ input[type=password]:focus{outline:none;border-color:#f97316}
 .error{color:#ef4444;font-size:14px;margin:8px 0}
 .tiny{color:#525252;font-size:12px;margin-top:24px}
 </style></head><body>
-<form class="card" method="POST" action="/oauth/authorize">
+<form class="card" method="POST" action="${ISSUER}/oauth/authorize">
 <h1>Approve <span class="client">${escapeHtml(client.client_name)}</span> access</h1>
 <p>This app wants to read and write to your GBrain.</p>
 <ul>
@@ -284,7 +297,7 @@ oauthRouter.post('/oauth/authorize', async (c) => {
     return c.text('GBRAIN_OAUTH_PASSWORD not configured on server', 500);
   }
   if (!constEq(password, OAUTH_PASSWORD)) {
-    // Re-render form with error
+    // Re-render form with error (uses GET endpoint at the public /mcp-prefixed URL)
     const url = new URL(`${ISSUER}/oauth/authorize`);
     url.searchParams.set('client_id', client_id);
     url.searchParams.set('redirect_uri', redirect_uri);
