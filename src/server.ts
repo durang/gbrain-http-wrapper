@@ -30,6 +30,16 @@ initPool();
 
 const app = new Hono();
 
+// ── Request logger (every request gets one log line) ─────────────
+app.use('*', async (c, next) => {
+  const t0 = Date.now();
+  await next();
+  const ms = Date.now() - t0;
+  const ua = (c.req.header('user-agent') || '-').slice(0, 60);
+  const ref = (c.req.header('referer') || '-').slice(0, 80);
+  console.error(`[req] ${c.req.method} ${c.req.path} ${c.res.status} ${ms}ms ua="${ua}" ref="${ref}"`);
+});
+
 // ── CORS: claude.ai web/desktop sometimes preflight from a browser origin ──
 app.use('*', async (c, next) => {
   // Reflect origin so anthropic web (claude.ai) and Desktop (file://) both work.
@@ -96,6 +106,19 @@ const handleRpc = async (c: any) => {
   }
   if (!body || typeof body !== 'object' || body.jsonrpc !== '2.0') {
     return c.json({ error: 'invalid_jsonrpc' }, 400);
+  }
+
+  // JSON-RPC 2.0: notifications have no `id` field → no response expected.
+  // Fire-and-forget to the pool; respond 202 Accepted immediately so clients
+  // don't hang waiting (which is what was causing claude.ai POSTs to time out
+  // at 60s with 500). Per MCP spec, notifications/initialized + cancellations
+  // arrive this way.
+  if (body.id === undefined) {
+    callMcp(body).catch((e) => {
+      console.error(`[mcp-notif] ${body.method || '?'} error: ${e.message}`);
+    });
+    console.error(`[mcp-notif] ${c.get('tokenName')} ${body.method || '?'} (fire-and-forget)`);
+    return c.body(null, 202);
   }
 
   const t0 = Date.now();

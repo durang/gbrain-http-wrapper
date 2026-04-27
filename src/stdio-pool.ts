@@ -123,11 +123,19 @@ function release(worker: Worker): void {
 /**
  * Send a JSON-RPC request through the pool and wait for the response.
  * The caller passes the full JSON-RPC envelope; we add nothing.
+ *
+ * If the message is a JSON-RPC notification (no `id`), we write it to stdin
+ * and return immediately — there will be no response per spec.
  */
 export async function callMcp(rpc: any): Promise<any> {
   const worker = await acquire();
   try {
     const id = rpc.id;
+    if (id === undefined) {
+      // Notification — no response expected
+      worker.proc.stdin.write(JSON.stringify(rpc) + '\n');
+      return { ok: true, notification: true };
+    }
     return await new Promise<any>((resolve, reject) => {
       const timer = setTimeout(() => {
         worker.pendingResolve = undefined;
