@@ -74,3 +74,29 @@ export async function validateToken(token: string): Promise<AuthResult> {
 export async function shutdownAuth() {
   await sql.end({ timeout: 5 });
 }
+
+/**
+ * Audit log — fire-and-forget INSERT into mcp_request_log.
+ * Never throws, never blocks the response. If DB is unreachable, log error and continue.
+ *
+ * Records: who (token_name), what (operation, e.g. "tools/call:put_page"),
+ * how long (latency_ms), outcome (status: ok | error | timeout | denied).
+ */
+export function auditLog(
+  tokenName: string | undefined,
+  operation: string,
+  latencyMs: number,
+  status: 'ok' | 'error' | 'timeout' | 'denied' | 'rate_limited',
+): void {
+  // Don't log if no token (un-auth'd requests are 401'd before reaching here anyway)
+  const safeName = tokenName || '__anonymous__';
+  // Truncate operation to fit text column gracefully
+  const safeOp = operation.slice(0, 200);
+  sql`
+    INSERT INTO mcp_request_log (token_name, operation, latency_ms, status)
+    VALUES (${safeName}, ${safeOp}, ${latencyMs}, ${status})
+  `.catch((e: any) => {
+    // Audit failure should NEVER block. Log it once and move on.
+    console.error('[audit] insert failed:', e?.message?.slice(0, 100) || e);
+  });
+}
