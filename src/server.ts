@@ -151,6 +151,149 @@ app.get('/health', (c) => {
   });
 });
 
+// ── GET /.well-known/mcp/custom-instructions ──────────────────────
+// Public discovery endpoint so MCP clients (claude.ai web/app, future clients)
+// can fetch the canonical capture rules adapted to THIS brain's actual page/link
+// types. Returns the v3 snippet + dynamic schema introspection.
+//
+// Spec version comes from brain-write-macro/SKILL.md frontmatter; page/link types
+// queried live from gbrain DB (5s timeout, returns degraded result on failure).
+//
+// Companion to /gbrain custom-instructions --adaptive (CLI) — same payload, served over HTTP.
+app.get('/.well-known/mcp/custom-instructions', async (c) => {
+  // Load skill spec version (best effort — falls back to "3" if not readable)
+  let specVersion = '3';
+  try {
+    const { readFileSync } = await import('node:fs');
+    const skillPath = `${process.env.HOME}/.openclaw/skills/brain-write-macro/SKILL.md`;
+    const text = readFileSync(skillPath, 'utf-8');
+    const m = text.match(/^custom-instructions-version:\s*(\d+)/m);
+    if (m) specVersion = m[1];
+  } catch {}
+
+  // Pull live page + link types from DB (degrade gracefully on failure)
+  let pageTypes: { type: string; count: number }[] = [];
+  let linkTypes: { type: string; count: number }[] = [];
+  try {
+    const postgres = (await import('postgres')).default;
+    const sql = postgres(process.env.DATABASE_URL!, {
+      max: 1,
+      connect_timeout: 5,
+      idle_timeout: 5,
+      prepare: false,
+    });
+    const ptRows = await sql`
+      SELECT type, COUNT(*)::int AS count FROM pages
+      WHERE type IS NOT NULL GROUP BY type ORDER BY 2 DESC LIMIT 12
+    `;
+    pageTypes = ptRows.map((r: any) => ({ type: r.type, count: r.count }));
+    const ltRows = await sql`
+      SELECT link_type AS type, COUNT(*)::int AS count FROM links
+      WHERE link_type IS NOT NULL GROUP BY link_type ORDER BY 2 DESC LIMIT 15
+    `;
+    linkTypes = ltRows.map((r: any) => ({ type: r.type, count: r.count }));
+    await sql.end({ timeout: 1 });
+  } catch (e: any) {
+    console.error(`[ci-endpoint] db introspection failed: ${e.message}`);
+  }
+
+  const snippet = `You have access to a "gbrain" MCP server (personal knowledge brain). When I say
+"guarda en gbrain", "guarda esto en mi brain", "lo importante en mi brain",
+"captura en gbrain", "save to brain", "save this to gbrain", "mete esto al brain",
+or just "guarda" after a substantive turn, run this exact procedure:
+
+DO NOT trigger on file/document save commands ("guarda este archivo", "save the file",
+"save the doc"). Brain capture only.
+
+PROCEDURE:
+
+1. SCAN this entire conversation (every turn) for:
+   - People named WITH attributes (role, company, location, age, contact, notable detail).
+     Skip name-only mentions like "I told John" with no other detail.
+   - Companies/funds/startups WITH attributes (industry, stage, founders, location).
+   - Decisions I took or stated ("vamos con X", "decidí Y", "let's go with Z", "no, mejor W").
+   - Original ideas, theses, or strategic insights I framed (not generic Q&A — only my
+     own framings). Preserve my exact phrasing in compiled_truth.
+
+2. SLUG RULES:
+   - Always kebab-case, lowercase, ASCII only (NO accents): sergio-duran, NOT sergio-durán.
+   - Format: people/firstname-lastname, companies/name, decisions/short-summary,
+     originals/short-kebab, projects/<name>, concepts/<topic>, recipes/<name>.
+
+3. CHECK BEFORE WRITE (avoid duplicates):
+   - Before each gbrain__put_page, call gbrain__get_page with fuzzy:true on the slug.
+   - If the page exists, READ its current compiled_truth, then call gbrain__put_page
+     with the merged content (existing + new attributes from this conversation).
+   - If not found, write fresh.
+
+3.5. R1 CONFLICT FLAG (NO silent overwrite):
+   - If a field in the existing page (status, role, company, location, dates, amounts)
+     CONTRADICTS the new value from this conversation, do NOT overwrite. Append:
+     ## Posible contradiccion (YYYY-MM-DD)
+     - Field: <name>
+     - Valor anterior: <old>
+     - Valor nuevo: <new>
+     - Source: claude.ai web session
+     - Accion: verificar con Sergio
+   - Mark this slug as (conflict-flagged) in the confirm output, not (enriched).
+
+4. WRITE PAGES with required frontmatter (one of these types):
+${pageTypes.length ? pageTypes.map((p) => `   - put_page slug:"<namespace>/<...>" type:"${p.type}"  // ${p.count} pages today`).join('\n') : `   - put_page slug:"people/<...>" type:"person"
+   - put_page slug:"companies/<...>" type:"company"
+   - put_page slug:"decisions/<...>" type:"decision"
+   - put_page slug:"originals/<...>" type:"original"
+   - put_page slug:"projects/<...>" type:"project"
+   - put_page slug:"concepts/<...>" type:"concept"
+   - put_page slug:"recipes/<...>" type:"recipe"`}
+
+4.5. R2 SOURCE TRACKING — every put_page includes provenance frontmatter:
+   sources:
+     - date: <today YYYY-MM-DD>
+       channel: claude-ai-web
+       session_id: <opaque short id from this conversation>
+   If sources already exists in the page, APPEND not REPLACE.
+
+5. CREATE LINKS for cross-references with gbrain__add_link:
+${linkTypes.length ? linkTypes.map((l) => `   - type:"${l.type}"  // ${l.count} links today`).join('\n') : `   - works_at, founded, invested_in, met_with, advised, collaborates_with, owns,
+   - subject_of, mentioned_in, superseded_by, negotiating, advises`}
+
+6. CONFIRM with the actual slugs you wrote AFTER all tool calls succeed:
+
+   Guardado en gbrain:
+   - people/mike-shapiro (new)
+   - people/jason-prescott (enriched)
+   - people/sarah-chen (conflict-flagged: status "advisor" vs "investor")
+   - companies/elafris (new)
+   - decisions/proposed-pool-split-33-30-30-10 (new)
+   - originals/insurance-vertical-thesis (new)
+   - 4 links: mike->elafris (founded), mike->digital-kozak (founded), ...
+
+CRITICAL RULES (anti-hallucination):
+- NEVER respond "guardado" / "saved" / "listo" / "done" without listing actual slugs you
+  called put_page on. That is hallucination.
+- NEVER ask "que quieres que guarde?" / "what should I save?". Infer from the conversation.
+  Better to write 8 pages and let me prune than to write 0 and ask.
+- NEVER write meta-content as if it were the entity. A page people/jason-prescott whose
+  body is "User initiated export request..." is wrong. If you don't have substantive
+  attributes about the entity, do not write the page.
+- NEVER overwrite a contradicting field silently. Always flag with the contradiction block.
+- If a put_page or add_link call returns an error, report it explicitly.
+- For "originals" (my ideas), preserve my exact phrasing in compiled_truth, not paraphrase.
+- One reply at the end with the slug list. No commentary mid-process.
+`;
+
+  return c.json({
+    spec_version: specVersion,
+    generated_at: new Date().toISOString(),
+    schema: {
+      page_types: pageTypes,
+      link_types: linkTypes,
+      introspection: pageTypes.length > 0 ? 'live' : 'fallback',
+    },
+    custom_instructions: snippet,
+  });
+});
+
 // JSON-RPC handler — registered at both `/` and `/mcp` so the wrapper works
 // behind a Tailscale Funnel that strips the /mcp prefix AND when accessed
 // directly on http://127.0.0.1:8787/mcp.
