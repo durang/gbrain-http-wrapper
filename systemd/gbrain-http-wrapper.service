@@ -1,24 +1,22 @@
 [Unit]
 Description=GBrain HTTP Wrapper (MCP over HTTP+Bearer)
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
-User=ec2-user
-Group=ec2-user
 WorkingDirectory=/home/ec2-user/gbrain-http-wrapper
 EnvironmentFile=/home/ec2-user/gbrain-http-wrapper/.env
 ExecStart=/home/ec2-user/.bun/bin/bun run src/server.ts
-Restart=always
-RestartSec=5
+Restart=on-failure
+RestartSec=30
 TimeoutStartSec=30
 StandardOutput=journal
 StandardError=journal
-
-# Hardening (relaxed: gbrain CLI lives in HOME and needs to spawn child bun
-# processes which may write logs / state under HOME)
 NoNewPrivileges=true
 PrivateTmp=true
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
