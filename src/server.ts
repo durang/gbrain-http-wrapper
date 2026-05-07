@@ -346,6 +346,51 @@ const handleRpc = async (c: any) => {
     return c.body(null, 202);
   }
 
+  // ── R2 Source tracking enforcement ─────────────────────────
+  // Inject source tracking into put_page calls based on the authenticated token.
+  // This ensures every write has provenance regardless of whether the LLM
+  // followed the custom instructions. The skill (/gbrain) is the authority;
+  // the wrapper enforces it at the infrastructure level.
+  if (body.method === 'tools/call' && body.params?.name === 'put_page' && body.params?.arguments) {
+    const args = body.params.arguments;
+    const today = new Date().toISOString().slice(0, 10);
+    // Map token names to canonical R2 channel values
+    const channelMap: Record<string, string> = {
+      'chatgpt-app': 'chatgpt-app',
+      'chatgpt-oauth': 'chatgpt-app',
+      'codex-mac': 'codex-cli',
+      'codex-remote': 'codex-cli',
+    };
+    // OAuth DCR tokens: "oauth/<client_id_hash>/<timestamp>"
+    // Known ChatGPT client hashes (from DCR registration)
+    const chatgptClients = new Set(['ca571e7db9a77203e10f161379975517']);
+    let channel = channelMap[tokenName] || 'http-wrapper';
+    if (tokenName.startsWith('oauth/')) {
+      const clientHash = tokenName.split('/')[1] || '';
+      channel = chatgptClients.has(clientHash) ? 'chatgpt-app' : 'claude-ai-web';
+    }
+    // Inject source tracking into the content's YAML frontmatter.
+    // put_page expects content = "---\n<yaml>\n---\n<body>" so we parse
+    // and re-serialize the frontmatter block with sources appended.
+    const content: string = args.content || '';
+    const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+    let yamlBlock = '';
+    let bodyBlock = content;
+    if (fmMatch) {
+      yamlBlock = fmMatch[1];
+      bodyBlock = fmMatch[2];
+    }
+    const sourceLine = `\n  - date: "${today}"\n    channel: "${channel}"`;
+    if (yamlBlock.includes('sources:')) {
+      // Append to existing sources array
+      yamlBlock = yamlBlock.replace(/(sources:.*)/s, `$1${sourceLine}`);
+    } else {
+      // Add new sources field
+      yamlBlock += `\nsources:${sourceLine}`;
+    }
+    body.params.arguments.content = `---\n${yamlBlock.replace(/^\n+/, '')}\n---\n${bodyBlock}`;
+  }
+
   const t0 = Date.now();
   try {
     const response = await callMcp(body);
