@@ -42,11 +42,12 @@ function pkceMatches(verifier: string, challenge: string): boolean {
 }
 
 // Constant-time string compare (prevents timing attacks on password)
+// Hash both inputs to fixed length before comparing — avoids leaking
+// the length of the expected value via early return.
 function constEq(a: string, b: string): boolean {
-  const A = Buffer.from(a);
-  const B = Buffer.from(b);
-  if (A.length !== B.length) return false;
-  return timingSafeEqual(A, B);
+  const hashA = createHash("sha256").update(a).digest();
+  const hashB = createHash("sha256").update(b).digest();
+  return timingSafeEqual(hashA, hashB);
 }
 
 // ─── Discovery metadata ────────────────────────────

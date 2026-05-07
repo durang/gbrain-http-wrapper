@@ -1,8 +1,20 @@
 # gbrain-http-wrapper
 
-OAuth 2.1 + Bearer HTTP front-end for `gbrain serve` (stdio MCP). Lets non-stdio clients — **Claude Desktop**, **Claude.ai web** (Cowork), mobile, Perplexity, custom apps — read and write to the same GBrain backend that local Claude Code uses via stdio.
+OAuth 2.1 + Bearer HTTP front-end for `gbrain serve` (stdio MCP). Lets non-stdio clients — **ChatGPT**, **Claude.ai web**, **Codex CLI** (remote), **Claude Desktop**, Perplexity, custom apps — read and write to the same GBrain backend that local clients use via stdio.
 
-> **Status:** Phase 4C connected. Claude Desktop ✅ and Claude.ai web ✅ both authenticate against this wrapper in production.
+> **Status:** Production. 7 clients connected: Claude Code CLI ✅, claude.ai web ✅, ChatGPT App (OAuth) ✅, Codex CLI (EC2 + Mac) ✅, OpenClaw/Telegram ✅, Hermes ✅
+
+## When to use this wrapper vs `gbrain serve --http`
+
+GBrain v0.22.7+ ships `gbrain serve --http` natively. Use **this wrapper** when you need:
+- **OAuth 2.1** with PKCE + Dynamic Client Registration (ChatGPT requires this)
+- **Master password** consent gate for third-party clients
+- **Process pool** (N pre-warmed `gbrain serve` children for concurrency)
+- **Per-token rate limiting** and audit logging
+- **Anti prompt-injection** content wrapping
+- **Custom Instructions endpoint** (`/.well-known/mcp/custom-instructions`)
+
+Use **native `gbrain serve --http`** when you just need simple Bearer token auth for trusted clients.
 
 ## Architecture
 
@@ -107,12 +119,22 @@ GBRAIN_OAUTH_PASSWORD=<long-random-string>
 - `GBRAIN_OAUTH_PASSWORD` — single-user master password shown on the consent screen. Use a long random value.
 - `GBRAIN_HOOK_RUNNING=1` — prevents recursive Stop-hook triggers from any `claude -p` call inside a `gbrain serve` child.
 
+## Setup
+
+```bash
+git clone https://github.com/durang/gbrain-http-wrapper.git
+cd gbrain-http-wrapper
+bun install
+cp .env.example .env
+# Edit .env — set DATABASE_URL and GBRAIN_OAUTH_PASSWORD
+```
+
 ## Run
 
 Foreground (dev):
 
 ```bash
-cd /home/ec2-user/gbrain-http-wrapper
+cd gbrain-http-wrapper
 set -a && . .env && set +a
 bun run src/server.ts
 ```
@@ -225,3 +247,59 @@ These are documented as known limits — being honest beats theatrical security.
 | 4C — Claude Desktop + Claude.ai web connected | ✅ Done |
 | Security pass — audit log + rate limit + content wrap | ✅ Done (2026-04-28) |
 | 4D — Upstream PR as `gbrain serve --http` | ⚙️  Garry merged equivalent in v0.22.7 (`gbrain serve --http`) — wrapper now optional for stdio-less clients |
+| 4E — ChatGPT App + Codex CLI connected | ✅ Done (2026-05-07) |
+
+## Connect your clients
+
+### ChatGPT App (Mac/web)
+
+1. Open chatgpt.com → Settings → Apps → Advanced → **Developer Mode ON**
+2. Add connector → paste your wrapper URL (e.g. `https://your-machine.ts.net/mcp`)
+3. Auth: **OAuth** → ChatGPT auto-discovers endpoints via `/.well-known/oauth-authorization-server`
+4. Authorize with your master password
+5. Paste [compact Custom Instructions](https://github.com/durang/gbrain-http-wrapper#custom-instructions) in ChatGPT → Settings → Personalization
+
+### Codex CLI (local)
+
+```bash
+codex mcp add gbrain -- gbrain serve
+```
+
+### Codex CLI (remote, from another machine)
+
+```bash
+gbrain auth create codex-remote --takes-holders world  # on the server
+export GBRAIN_TOKEN="gbrain_..."                        # on the client
+codex mcp add gbrain --url https://your-machine.ts.net/mcp --bearer-token-env-var GBRAIN_TOKEN
+```
+
+### Claude Code CLI
+
+```bash
+claude mcp add gbrain -- gbrain serve
+```
+
+### Claude.ai web
+
+1. Connect via Settings → Integrations → Add MCP server
+2. URL: `https://your-machine.ts.net/mcp`
+3. Auth: Bearer token from `gbrain auth create "claude-web"`
+
+### Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "gbrain": {
+      "url": "https://your-machine.ts.net/mcp",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN" }
+    }
+  }
+}
+```
+
+## License
+
+MIT
