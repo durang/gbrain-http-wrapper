@@ -300,6 +300,24 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
+## Recommended: install the `/gbrain` orchestrator skill
+
+This wrapper is the **HTTP bridge** — it connects remote clients to your brain. But to orchestrate everything (health checks, custom instructions generation, client detection, upgrade decisions), install the `/gbrain` skill:
+
+```bash
+# For Claude Code CLI
+claude mcp add gbrain -- gbrain serve
+
+# Then run the health dashboard
+/gbrain check    # 17-layer dashboard — detects all clients, shows what's missing
+/gbrain fix      # auto-fix safe issues
+/gbrain custom-instructions --adaptive   # generates instructions for claude.ai + ChatGPT
+```
+
+The `/gbrain` skill (Layer 18) automatically detects which clients are connected and whether they have the brain-write-macro v3 rules loaded. It tells you exactly what to paste where.
+
+**Without the skill**, your wrapper works fine — but you lose the orchestration, the health monitoring, and the automatic custom-instructions generation.
+
 ## License
 
 MIT
