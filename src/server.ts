@@ -138,7 +138,12 @@ async function requireAuth(c: any) {
 }
 
 // ── Mount OAuth router (handles /.well-known/* and /oauth/*) ──────
+// Mount under both root and /mcp. Some proxies (Tailscale Funnel set-path) strip
+// /mcp before forwarding; other clients connect directly with the /mcp prefix
+// intact. Dual mounting keeps OAuth discovery and consent routes working in
+// both deployment modes.
 app.route('/', oauthRouter);
+app.route('/mcp', oauthRouter);
 
 // ── GET /health (no auth) ────────────────────────
 app.get('/health', (c) => {

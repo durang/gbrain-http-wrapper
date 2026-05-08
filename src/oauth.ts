@@ -27,6 +27,7 @@ const OAUTH_PASSWORD = process.env.GBRAIN_OAUTH_PASSWORD || '';
 // from the client's perspective; internally Hono routes them under root because
 // that's what the wrapper actually receives after strip.
 const ISSUER = (BASE_URL ? `${BASE_URL}/mcp` : 'https://localhost/mcp');
+const ACCESS_TOKEN_TTL_SEC = 3600 * 24 * 7;
 
 const sql = postgres(DATABASE_URL, { prepare: false });
 
@@ -48,6 +49,23 @@ function constEq(a: string, b: string): boolean {
   const hashA = createHash("sha256").update(a).digest();
   const hashB = createHash("sha256").update(b).digest();
   return timingSafeEqual(hashA, hashB);
+}
+
+function validateRedirectUris(redirectUris: string[]): { ok: boolean; error?: string } {
+  for (const uri of redirectUris) {
+    let parsed: URL;
+    try {
+      parsed = new URL(uri);
+    } catch {
+      return { ok: false, error: `Invalid redirect_uri: ${uri}` };
+    }
+    const isHttps = parsed.protocol === 'https:';
+    const isLoopbackHttp = parsed.protocol === 'http:' && (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost');
+    if (!isHttps && !isLoopbackHttp) {
+      return { ok: false, error: `redirect_uri must use https, or localhost/127.0.0.1 http for local clients: ${uri}` };
+    }
+  }
+  return { ok: true };
 }
 
 // ─── Discovery metadata ────────────────────────────
@@ -147,8 +165,9 @@ async function issueAccessToken(client_id: string, scope: string) {
   const token = randomToken(32);
   const token_hash = sha256(token);
   const name = `oauth/${client_id}/${Date.now()}`;
+  const expires_at = new Date(Date.now() + ACCESS_TOKEN_TTL_SEC * 1000);
   await sql`
-    INSERT INTO access_tokens (name, token_hash) VALUES (${name}, ${token_hash})
+    INSERT INTO access_tokens (name, token_hash, expires_at) VALUES (${name}, ${token_hash}, ${expires_at})
   `;
   return { access_token: token, name };
 }
@@ -205,6 +224,10 @@ oauthRouter.post('/oauth/register', async (c) => {
   const redirect_uris = Array.isArray(body.redirect_uris) ? body.redirect_uris : [];
   if (redirect_uris.length === 0) {
     return c.json({ error: 'invalid_redirect_uri', error_description: 'redirect_uris required' }, 400);
+  }
+  const redirectCheck = validateRedirectUris(redirect_uris);
+  if (!redirectCheck.ok) {
+    return c.json({ error: 'invalid_redirect_uri', error_description: redirectCheck.error }, 400);
   }
   const client_name = body.client_name || 'unnamed-client';
   const auth_method = body.token_endpoint_auth_method || 'none';
@@ -340,7 +363,7 @@ oauthRouter.post('/oauth/token', async (c) => {
     return c.json({
       access_token: issued.access_token,
       token_type: 'Bearer',
-      expires_in: 3600 * 24 * 7, // 7 days
+      expires_in: ACCESS_TOKEN_TTL_SEC,
       refresh_token: refresh,
       scope: consumed.scope,
     });
@@ -356,7 +379,7 @@ oauthRouter.post('/oauth/token', async (c) => {
     return c.json({
       access_token: issued.access_token,
       token_type: 'Bearer',
-      expires_in: 3600 * 24 * 7,
+      expires_in: ACCESS_TOKEN_TTL_SEC,
       scope: r.scope,
     });
   }

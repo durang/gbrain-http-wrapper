@@ -1,6 +1,11 @@
 -- OAuth 2.1 schema for gbrain-http-wrapper
 -- Reuses existing access_tokens table for issued Bearer tokens.
 
+-- OAuth-issued access tokens expire server-side. Existing/static CLI tokens may
+-- leave expires_at NULL, which means "valid until revoked" for backward compatibility.
+ALTER TABLE access_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS access_tokens_expires_idx ON access_tokens(expires_at);
+
 CREATE TABLE IF NOT EXISTS oauth_clients (
   client_id TEXT PRIMARY KEY,
   client_secret_hash TEXT,                -- nullable for public clients (PKCE)
@@ -39,3 +44,15 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
   revoked_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS mcp_request_log (
+  id BIGSERIAL PRIMARY KEY,
+  token_name TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  latency_ms INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL CHECK (status IN ('ok', 'error', 'timeout', 'denied', 'rate_limited')),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS mcp_request_log_created_idx ON mcp_request_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS mcp_request_log_token_idx ON mcp_request_log(token_name, created_at DESC);
