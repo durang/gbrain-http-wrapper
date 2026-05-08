@@ -22,7 +22,8 @@ const sql = postgres(DATABASE_URL!, { prepare: false });
 
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 
-// Cache to reduce DB hits — tokens valid for 60s after first lookup.
+// Cache to reduce DB hits — tokens valid for up to 60s after first lookup.
+// If the DB row has expires_at, never cache past that server-side expiry.
 const cache = new Map<string, { name: string; expires: number }>();
 const CACHE_TTL_MS = 60_000;
 
@@ -45,8 +46,8 @@ export async function validateToken(token: string): Promise<AuthResult> {
   }
 
   try {
-    const rows = await sql<{ name: string; revoked_at: Date | null }[]>`
-      SELECT name, revoked_at
+    const rows = await sql<{ name: string; revoked_at: Date | null; expires_at: Date | null }[]>`
+      SELECT name, revoked_at, expires_at
       FROM access_tokens
       WHERE token_hash = ${hash}
       LIMIT 1
@@ -57,7 +58,11 @@ export async function validateToken(token: string): Promise<AuthResult> {
     if (rows[0].revoked_at) {
       return { ok: false, error: 'revoked' };
     }
-    cache.set(hash, { name: rows[0].name, expires: now + CACHE_TTL_MS });
+    if (rows[0].expires_at && new Date(rows[0].expires_at) < new Date()) {
+      return { ok: false, error: 'expired' };
+    }
+    const dbExpiry = rows[0].expires_at ? new Date(rows[0].expires_at).getTime() : Infinity;
+    cache.set(hash, { name: rows[0].name, expires: Math.min(now + CACHE_TTL_MS, dbExpiry) });
 
     // Update last_used_at (fire-and-forget, don't block)
     sql`
