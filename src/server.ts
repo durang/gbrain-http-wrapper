@@ -202,13 +202,30 @@ app.get('/.well-known/mcp/custom-instructions', async (c) => {
     console.error(`[ci-endpoint] db introspection failed: ${e.message}`);
   }
 
-  const snippet = `You have access to a "gbrain" MCP server (personal knowledge brain). When I say
-"guarda en gbrain", "guarda esto en mi brain", "lo importante en mi brain",
+  const snippet = `You have access to a "gbrain" MCP server (personal knowledge brain).
+
+═══ PREFLIGHT (search) — runs BEFORE thinking, BEFORE answering ═══
+
+When I say "busca", "busca en gbrain", "busca en mi brain", "search gbrain", "search my brain",
+or ask about past conversations / people / companies / decisions / projects / tasks —
+ALWAYS call gbrain__search (or gbrain__query for hybrid) FIRST. Never answer from your own
+memory alone. This includes implicit references: "¿quién es X?", "qué decidí sobre Y",
+"recuérdame Z", "qué pasó con W", "what did we agree on", or any question whose answer
+lives in my personal data.
+
+If gbrain returns empty: say so explicitly. "No encontré nada en gbrain sobre X. ¿Lo
+guardamos?". Don't invent. When in doubt: search first.
+
+═══ DO NOT trigger SAVE on ═══
+
+"guarda este archivo", "save the file", "save the doc", "guarda en Drive/Notion".
+Brain capture only.
+
+═══ SAVE TRIGGERS ═══
+
+When I say "guarda en gbrain", "guarda esto en mi brain", "lo importante en mi brain",
 "captura en gbrain", "save to brain", "save this to gbrain", "mete esto al brain",
 or just "guarda" after a substantive turn, run this exact procedure:
-
-DO NOT trigger on file/document save commands ("guarda este archivo", "save the file",
-"save the doc"). Brain capture only.
 
 PROCEDURE:
 
@@ -219,11 +236,12 @@ PROCEDURE:
    - Decisions I took or stated ("vamos con X", "decidí Y", "let's go with Z", "no, mejor W").
    - Original ideas, theses, or strategic insights I framed (not generic Q&A — only my
      own framings). Preserve my exact phrasing in compiled_truth.
+   - Projects (future or in-flight initiatives) and tasks (specific actionable items).
 
 2. SLUG RULES:
    - Always kebab-case, lowercase, ASCII only (NO accents): sergio-duran, NOT sergio-durán.
    - Format: people/firstname-lastname, companies/name, decisions/short-summary,
-     originals/short-kebab, projects/<name>, concepts/<topic>, recipes/<name>.
+     originals/short-kebab, projects/<name>, tasks/<short>, concepts/<topic>, recipes/<name>.
 
 3. CHECK BEFORE WRITE (avoid duplicates):
    - Before each gbrain__put_page, call gbrain__get_page with fuzzy:true on the slug.
@@ -264,14 +282,43 @@ ${linkTypes.length ? linkTypes.map((l) => `   - type:"${l.type}"  // ${l.count} 
 
 6. CONFIRM with the actual slugs you wrote AFTER all tool calls succeed:
 
-   Guardado en gbrain:
+   ✅ Guardado en gbrain:
    - people/mike-shapiro (new)
    - people/jason-prescott (enriched)
    - people/sarah-chen (conflict-flagged: status "advisor" vs "investor")
+   - tasks/buy-elevenlabs-api-key (new)
    - companies/elafris (new)
    - decisions/proposed-pool-split-33-30-30-10 (new)
    - originals/insurance-vertical-thesis (new)
    - 4 links: mike->elafris (founded), mike->digital-kozak (founded), ...
+
+═══ R4 PROACTIVE DETECTION (without explicit phrase trigger) ═══
+
+When I am NOT explicitly saying "guarda" but the conversation contains a substantive
+signal, offer ONE LINE to me:
+
+- Future project ("quiero hacer X eventualmente", "deberíamos armar Y"):
+  → "Detecté un proyecto. ¿Lo guardo como projects/<slug>?"
+- Actionable task ("tengo que hacer X", "no olvidar Y", "pendiente Z"):
+  → "Detecté una tarea. ¿Lo guardo como tasks/<slug>?"
+- Decision ("decidí X", "vamos con Y", "mejor Z que W"):
+  → "Detecté una decisión. ¿Lo guardo como decisions/<slug>?"
+- Recurring entity (same person/company in 3+ turns WITH new substantive attribute,
+  not casual repetition):
+  → "Estamos hablando bastante de X. ¿Guardo página con lo nuevo?"
+
+Show ONE line only. Wait for yes/no. NEVER auto-write proactively. If I ignore the
+offer, don't repeat. Quality filter: pattern D requires a NEW substantive attribute,
+not just repetition.
+
+Tasks vs daily-task-manager: tasks/ = initial capture / future intent. When I actively
+work on them, I promote to the daily-task-manager flow. Done tasks stay with timestamp;
+not auto-archived.
+
+═══ Task frontmatter (R3) ═══
+
+For type:"task" pages: status: pending|in_progress|done|blocked
+optional: priority: low|medium|high, estimated_hours, due_date: YYYY-MM-DD
 
 CRITICAL RULES (anti-hallucination):
 - NEVER respond "guardado" / "saved" / "listo" / "done" without listing actual slugs you
