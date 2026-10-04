@@ -76,6 +76,28 @@ export async function validateToken(token: string): Promise<AuthResult> {
   }
 }
 
+const clientNameCache = new Map<string, { name: string | null; at: number }>();
+
+/**
+ * Name a client registered under (DCR `client_name`), e.g. "Claude", "ChatGPT", "grok-v2".
+ * Lets the R2 stamp tell clients apart without hard-coding client ids, so a client added
+ * later is labelled correctly. Cached 10 min; failures are not cached and return null so
+ * the caller can fall back.
+ */
+export async function clientNameFor(clientId: string): Promise<string | null> {
+  if (!clientId) return null;
+  const hit = clientNameCache.get(clientId);
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.name;
+  try {
+    const rows = await sql`SELECT client_name FROM oauth_clients WHERE client_id = ${clientId} LIMIT 1`;
+    const name = (rows[0]?.client_name as string | undefined) ?? null;
+    clientNameCache.set(clientId, { name, at: Date.now() });
+    return name;
+  } catch {
+    return null;
+  }
+}
+
 export async function shutdownAuth() {
   await sql.end({ timeout: 5 });
 }

@@ -16,7 +16,8 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { initPool, callMcp, poolStatus, shutdownPool } from './stdio-pool.ts';
-import { validateToken, shutdownAuth, auditLog } from './auth.ts';
+import { validateToken, shutdownAuth, auditLog, clientNameFor } from './auth.ts';
+import { addSourceEntry, channelFromClientName } from './sources.ts';
 import { oauthRouter, shutdownOauth } from './oauth.ts';
 
 // ── Rate limiter (in-memory, per-token) ──────────────────────────
@@ -412,14 +413,21 @@ const handleRpc = async (c: any) => {
       'chatgpt-oauth': 'chatgpt-app',
       'codex-mac': 'codex-cli',
       'codex-remote': 'codex-cli',
+      // static Bearer tokens are named when created (`gbrain auth create "<name>"`)
+      'cursor': 'cursor',
+      'grok': 'grok',
     };
     // OAuth DCR tokens: "oauth/<client_id_hash>/<timestamp>"
     // Known ChatGPT client hashes (from DCR registration)
     const chatgptClients = new Set(['ca571e7db9a77203e10f161379975517']);
     let channel = channelMap[tokenName] || 'http-wrapper';
     if (tokenName.startsWith('oauth/')) {
-      const clientHash = tokenName.split('/')[1] || '';
-      channel = chatgptClients.has(clientHash) ? 'chatgpt-app' : 'claude-ai-web';
+      const clientId = tokenName.split('/')[1] || '';
+      // Classify by the client's registered name. Cursor aside, every OAuth client used to
+      // fall through to 'claude-ai-web', so Grok was stamped as claude.ai. The old rule is
+      // kept as the fallback for when the lookup fails or the name is unrecognised.
+      channel = channelFromClientName(await clientNameFor(clientId))
+        ?? (chatgptClients.has(clientId) ? 'chatgpt-app' : 'claude-ai-web');
     }
     // Inject source tracking into the content's YAML frontmatter.
     // put_page expects content = "---\n<yaml>\n---\n<body>" so we parse
@@ -432,14 +440,7 @@ const handleRpc = async (c: any) => {
       yamlBlock = fmMatch[1];
       bodyBlock = fmMatch[2];
     }
-    const sourceLine = `\n  - date: "${today}"\n    channel: "${channel}"`;
-    if (yamlBlock.includes('sources:')) {
-      // Append to existing sources array
-      yamlBlock = yamlBlock.replace(/(sources:.*)/s, `$1${sourceLine}`);
-    } else {
-      // Add new sources field
-      yamlBlock += `\nsources:${sourceLine}`;
-    }
+    yamlBlock = addSourceEntry(yamlBlock, channel, today);
     body.params.arguments.content = `---\n${yamlBlock.replace(/^\n+/, '')}\n---\n${bodyBlock}`;
   }
 
